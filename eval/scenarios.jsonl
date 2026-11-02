@@ -1,0 +1,11 @@
+{"message": "What is your return policy?", "expected_route": "knowledge", "expect_approval": false, "expect_escalation": false}
+{"message": "How do I track my order?", "expected_route": "knowledge", "expect_approval": false, "expect_escalation": false}
+{"message": "Do you ship internationally?", "expected_route": "knowledge", "expect_approval": false, "expect_escalation": false}
+{"message": "What payment methods do you accept?", "expected_route": "knowledge", "expect_approval": false, "expect_escalation": false}
+{"message": "What is the status of ORD-1001?", "expected_route": "order", "expect_approval": false, "expect_escalation": false}
+{"message": "Where is my package ORD-1003?", "expected_route": "order", "expect_approval": false, "expect_escalation": false}
+{"message": "I want a refund for ORD-1002", "expected_route": "order", "expect_approval": true, "expect_escalation": false}
+{"message": "Please cancel ORD-1003", "expected_route": "order", "expect_approval": true, "expect_escalation": false}
+{"message": "I want a refund", "expected_route": "order", "expect_approval": false, "expect_escalation": false}
+{"message": "asdkfj random gibberish query", "expected_route": "escalate", "expect_approval": false, "expect_escalation": true}
+{"message": "xyzzy plugh quux wibble", "expected_route": "escalate", "expect_approval": false, "expect_escalation": true}

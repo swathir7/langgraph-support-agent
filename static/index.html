@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Reliable LangGraph Support Agent</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --bg: #0b0d12; --panel: #12151c; --panel-raised: #181c25; --line: #262b36;
+    --ink: #e8eaf0; --ink-dim: #a5abba; --ink-faint: #6b7280; --accent: #7c9eff;
+    --good: #3ec98f; --bad: #ef6461;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  header { padding: 1rem 1.5rem; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 1rem; margin: 0; }
+  header p { font-size: 0.8rem; color: var(--ink-faint); margin: 0.25rem 0 0; }
+  main { max-width: 720px; margin: 0 auto; padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
+  #messages { display: flex; flex-direction: column; gap: 0.85rem; min-height: 40vh; }
+  .msg { max-width: 85%; }
+  .msg.user { align-self: flex-end; text-align: right; }
+  .msg .label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-faint); margin-bottom: 0.2rem; }
+  .msg .bubble { background: var(--panel-raised); border: 1px solid var(--line); border-radius: 10px; padding: 0.6rem 0.9rem; white-space: pre-wrap; }
+  .msg.user .bubble { background: var(--accent); color: #0b0d12; border: none; }
+  .approval { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 0.85rem 1rem; }
+  .approval .prompt { margin-bottom: 0.6rem; }
+  .approval button { margin-right: 0.5rem; border: none; border-radius: 6px; padding: 0.4rem 0.9rem; font-weight: 600; cursor: pointer; }
+  .approve { background: var(--good); color: #0b0d12; }
+  .deny { background: var(--bad); color: #0b0d12; }
+  .trace { font-size: 0.7rem; color: var(--ink-faint); margin-top: 0.3rem; }
+  .escalated { color: #f2b134; font-size: 0.7rem; }
+  form { display: flex; gap: 0.5rem; }
+  input[type=text] { flex: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; color: var(--ink); padding: 0.6rem 0.75rem; font-size: 0.9rem; }
+  button[type=submit] { background: var(--accent); color: #0b0d12; border: none; border-radius: 6px; padding: 0.6rem 1.1rem; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .hint { font-size: 0.78rem; color: var(--ink-faint); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Reliable LangGraph Support Agent</h1>
+  <p>Try: "How do I track my order?" · "What is the status of ORD-1001?" · "I want a refund for ORD-1002" · "asdkfj gibberish"</p>
+</header>
+<main>
+  <div id="messages"></div>
+  <form id="chat-form">
+    <input id="chat-input" type="text" placeholder="Ask a question or manage an order…" autocomplete="off" />
+    <button type="submit">Send</button>
+  </form>
+  <p class="hint">Order ids in the demo dataset: ORD-1001, ORD-1002, ORD-1003.</p>
+
+  <section class="eval">
+    <h2 style="font-size:0.85rem; margin: 1rem 0 0.5rem;">Routing evaluation</h2>
+    <button id="run-eval" type="button">Run eval/scenarios.jsonl</button>
+    <div id="eval-summary" class="hint" style="margin-top:0.5rem;"></div>
+    <table id="eval-table" style="width:100%; border-collapse: collapse; font-size:0.78rem; margin-top:0.5rem; display:none;">
+      <thead>
+        <tr>
+          <th style="text-align:left; border-bottom:1px solid var(--line); padding:0.3rem;">Message</th>
+          <th style="text-align:left; border-bottom:1px solid var(--line); padding:0.3rem;">Expected → Actual route</th>
+          <th style="text-align:left; border-bottom:1px solid var(--line); padding:0.3rem;">Approval</th>
+          <th style="text-align:left; border-bottom:1px solid var(--line); padding:0.3rem;">Escalated</th>
+          <th style="text-align:left; border-bottom:1px solid var(--line); padding:0.3rem;">Pass</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+</main>
+<script>
+  const threadId = crypto.randomUUID();
+  const messagesEl = document.getElementById("messages");
+  const form = document.getElementById("chat-form");
+  const input = document.getElementById("chat-input");
+
+  function addMessage(role, text) {
+    const wrap = document.createElement("div");
+    wrap.className = "msg " + (role === "user" ? "user" : "assistant");
+    wrap.innerHTML = `<div class="label">${role === "user" ? "You" : "Agent"}</div><div class="bubble"></div>`;
+    wrap.querySelector(".bubble").textContent = text;
+    messagesEl.appendChild(wrap);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return wrap;
+  }
+
+  function addTrace(container, trace, escalated) {
+    if (trace && trace.length) {
+      const el = document.createElement("div");
+      el.className = "trace";
+      el.textContent = trace.map(s => `${s.node} ${s.duration_ms.toFixed(2)}ms`).join(" · ");
+      container.appendChild(el);
+    }
+    if (escalated) {
+      const el = document.createElement("div");
+      el.className = "escalated";
+      el.textContent = "⚠ escalated to a human agent";
+      container.appendChild(el);
+    }
+  }
+
+  function addApproval(approval) {
+    const wrap = document.createElement("div");
+    wrap.className = "approval";
+    wrap.innerHTML = `<div class="prompt">${approval.prompt}</div>`;
+    const approveBtn = document.createElement("button");
+    approveBtn.className = "approve";
+    approveBtn.textContent = "Approve";
+    const denyBtn = document.createElement("button");
+    denyBtn.className = "deny";
+    denyBtn.textContent = "Deny";
+    wrap.appendChild(approveBtn);
+    wrap.appendChild(denyBtn);
+    messagesEl.appendChild(wrap);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+
+    const resolve = async (approved) => {
+      approveBtn.disabled = true;
+      denyBtn.disabled = true;
+      const response = await fetch("/chat/resume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ thread_id: threadId, approved }),
+      });
+      const body = await response.json();
+      handleResult(body);
+    };
+    approveBtn.onclick = () => resolve(true);
+    denyBtn.onclick = () => resolve(false);
+  }
+
+  function handleResult(body) {
+    if (body.status === "awaiting_approval") {
+      addApproval(body.approval);
+      return;
+    }
+    const container = addMessage("assistant", body.reply || "");
+    addTrace(container, body.trace, body.escalated);
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const message = input.value.trim();
+    if (!message) return;
+    addMessage("user", message);
+    input.value = "";
+    input.disabled = true;
+    try {
+      const response = await fetch("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ thread_id: threadId, message }),
+      });
+      const body = await response.json();
+      handleResult(body);
+    } catch (error) {
+      addMessage("assistant", "Something went wrong: " + error);
+    } finally {
+      input.disabled = false;
+      input.focus();
+    }
+  });
+
+  document.getElementById("run-eval").addEventListener("click", async (event) => {
+    const button = event.target;
+    button.disabled = true;
+    button.textContent = "Running…";
+    const summaryEl = document.getElementById("eval-summary");
+    const table = document.getElementById("eval-table");
+    const tbody = table.querySelector("tbody");
+    try {
+      const response = await fetch("/eval/run");
+      const body = await response.json();
+      summaryEl.textContent = `${body.passed}/${body.total} scenarios passed (${(body.pass_rate * 100).toFixed(0)}%).`;
+      tbody.innerHTML = "";
+      for (const r of body.results) {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td style="padding:0.3rem; border-bottom:1px solid var(--line);">${r.message}</td>
+          <td style="padding:0.3rem; border-bottom:1px solid var(--line);">${r.expected_route} → ${r.actual_route}</td>
+          <td style="padding:0.3rem; border-bottom:1px solid var(--line);">${r.expect_approval} → ${r.actual_approval}</td>
+          <td style="padding:0.3rem; border-bottom:1px solid var(--line);">${r.expect_escalation} → ${r.actual_escalation}</td>
+          <td style="padding:0.3rem; border-bottom:1px solid var(--line); color:${r.passed ? "var(--good)" : "var(--bad)"};">${r.passed ? "✓" : "✗"}</td>
+        `;
+        tbody.appendChild(row);
+      }
+      table.style.display = "table";
+    } catch (error) {
+      summaryEl.textContent = "Eval run failed: " + error;
+    } finally {
+      button.disabled = false;
+      button.textContent = "Run eval/scenarios.jsonl";
+    }
+  });
+</script>
+</body>
+</html>
